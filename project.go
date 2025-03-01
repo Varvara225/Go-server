@@ -33,14 +33,13 @@ var (
 		StatusCounts:  make(map[int]int),
 		ClientStats:   make(map[int]*Client),
 	}
-	limiter = rate.NewLimiter(rate.Every(time.Second/5), 5)
-	// для завершения работы client3
+	limiter     = rate.NewLimiter(rate.Every(time.Second/5), 5)
 	ctx, cancel = context.WithCancel(context.Background())
 )
 
 func main() {
 	// загрузка .env file
-	err := godotenv.Load()
+	err := godotenv.Load("/Users/Varvara/Downloads/WBTypes5/WBTypes/Project/.env")
 	if err != nil {
 		log.Fatalf("Error loading .env file: %v", err)
 	}
@@ -71,7 +70,7 @@ func main() {
 	cancel()
 
 	stats, _ := json.MarshalIndent(serverStats, "", "  ")
-	fmt.Println("Final Server Stats:", string(stats))
+	_ = os.WriteFile("server_stats.json", stats, 0644)
 }
 
 func handleRequest(w http.ResponseWriter, r *http.Request) {
@@ -129,26 +128,35 @@ func client(id int, wg *sync.WaitGroup, port string, ctx context.Context) {
 			}
 		}
 	} else {
+		// Общий лимитер для всех воркеров клиента
+		clientLimiter := rate.NewLimiter(rate.Every(time.Second/5), 5)
+
 		var wgWorkers sync.WaitGroup
 		wgWorkers.Add(2)
 		for i := 1; i <= 2; i++ {
-			go worker(i, id, &wgWorkers, port)
+			go worker(i, id, port, &wgWorkers, clientLimiter)
 		}
 		wgWorkers.Wait()
+		log.Printf("Client %d finished", id)
 	}
 }
 
-func worker(workerID int, clientID int, wg *sync.WaitGroup, port string) {
+func worker(workerID int, clientID int, port string, wg *sync.WaitGroup, limiter *rate.Limiter) {
 	defer wg.Done()
-	// генерация статусов для запросов клиентов
 	statuses := generateStatuses()
+
 	for i := 1; i <= 50; i++ {
-		resp, err := http.Post("http://localhost:"+port, "application/json", nil)
-		log.Printf("Worker %d: Client %d send request %d", workerID, clientID, i)
-		if err != nil {
-			log.Printf("Client %d: Error making request: %s\n", clientID, err)
+		if err := limiter.Wait(context.Background()); err != nil {
+			log.Printf("Worker %d: Client %d: Rate limiter error: %v\n", workerID, clientID, err)
 			continue
 		}
+
+		resp, err := http.Post("http://localhost:"+port, "application/json", nil)
+		if err != nil {
+			log.Printf("Worker %d: Client %d: Error making request: %s\n", workerID, clientID, err)
+			continue
+		}
+
 		serverStats.mu.Lock()
 		if _, exists := serverStats.ClientStats[clientID]; !exists {
 			serverStats.ClientStats[clientID] = &Client{
@@ -160,8 +168,8 @@ func worker(workerID int, clientID int, wg *sync.WaitGroup, port string) {
 		serverStats.ClientStats[clientID].StatusCounts[statuses[i]]++
 		serverStats.mu.Unlock()
 		resp.Body.Close()
-		// 5 запросов/сек
-		time.Sleep(time.Second / 5)
+
+		// log.Printf("Worker %d: Client %d: Request %d sent\n", workerID, clientID, i)
 	}
 }
 
