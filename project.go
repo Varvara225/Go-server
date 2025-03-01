@@ -168,8 +168,6 @@ func worker(workerID int, clientID int, port string, wg *sync.WaitGroup, limiter
 		serverStats.ClientStats[clientID].StatusCounts[statuses[i]]++
 		serverStats.mu.Unlock()
 		resp.Body.Close()
-
-		// log.Printf("Worker %d: Client %d: Request %d sent\n", workerID, clientID, i)
 	}
 }
 
